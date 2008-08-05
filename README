@@ -3,7 +3,7 @@ NAME
     list context.
 
 VERSION
-    Version 0.01
+    Version 0.02
 
 SYNOPSIS
         use Sub::Nary;
@@ -22,7 +22,7 @@ METHODS
   "new"
     The usual constructor. Currently takes no argument.
 
-  "nary $coderf"
+  "nary $coderef"
     Takes a code reference to a named or anonymous subroutine, and returns a
     hash reference whose keys are the possible numbers of returning scalars,
     and the corresponding values the "probability" to get them. The special
@@ -88,7 +88,12 @@ PROBABILITY OF RETURN
         1/4", 3 with probability "1/2 * 1/2 + 1/2 * 1/2 = 1/2" and 4 with
         probability "1/4" too.
 
-    * The 'list' state is absorbant in regard of all the other ones.
+    * If a core function may return different numbers of scalars, each kind
+    is considered equally possible.
+        For example, "stat" returns 13 elements on success and 0 on error.
+        The according probability will then be "{ 0 => 0.5, 13 => 0.5 }".
+
+    * The "list" state is absorbing in regard of all the other ones.
         This is just a pedantic way to say that "list + fixed length =
         list". That's why
 
@@ -96,9 +101,10 @@ PROBABILITY OF RETURN
              return 1, simple(), @_
             }
 
-        is considered as always returning an unbounded list. The convolution
-        law also does not behave the same when "list" elements are involved
-        : in the following example,
+        is considered as always returning an unbounded list.
+
+        Also, the convolution law does not behave the same when "list"
+        elements are involved : in the following example,
 
             sub oneorlist {
              if (rand < 0.1) {

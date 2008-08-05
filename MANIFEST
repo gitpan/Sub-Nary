@@ -14,6 +14,7 @@ t/20-return.t
 t/21-list.t
 t/22-call.t
 t/23-branch.t
+t/24-ops.t
 t/90-boilerplate.t
 t/91-pod.t
 t/92-pod-coverage.t

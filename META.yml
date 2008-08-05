@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Sub-Nary
-version:             0.01
+version:             0.02
 abstract:            Try to count how many elements a subroutine can return in list context.
 license:             perl
 author:              

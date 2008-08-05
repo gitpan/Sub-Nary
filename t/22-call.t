@@ -3,11 +3,15 @@
 use strict;
 use warnings;
 
-use Test::More tests => 39;
+use Test::More tests => 41;
 
 use Sub::Nary;
 
 my $sn = Sub::Nary->new();
+
+sub CORE::GLOBAL::reset {
+ return 1, 2, 3
+}
 
 sub zero { }
 sub one  { 1 }
@@ -68,11 +72,15 @@ my @tests = (
  [ sub { \&zero },          1 ],
  [ sub { *zero },           1 ],
  [ sub { *zero{CODE}->() }, 'list' ],
+
+ [ sub { &CORE::GLOBAL::shift }, 'list' ],
+ [ sub { &CORE::GLOBAL::reset }, 3 ],
 );
 
 my $i = 1;
 for (@tests) {
  my $r = $sn->nary($_->[0]);
- is_deeply($r, { $_->[1] => 1 }, 'call test ' . $i);
+ my $exp = ref $_->[1] ? $_->[1] : { $_->[1] => 1 };
+ is_deeply($r, $exp, 'call test ' . $i);
  ++$i;
 }

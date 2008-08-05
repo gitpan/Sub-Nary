@@ -64,7 +64,8 @@ my @tests = (
 my $i = 1;
 for (@tests) {
  my $r = $sn->nary($_->[0]);
- is_deeply($r, $_->[1], 'branch test ' . $i);
+ my $exp = ref $_->[1] ? $_->[1] : { $_->[1] => 1 };
+ is_deeply($r, $exp, 'branch test ' . $i);
  ++$i;
 }
 

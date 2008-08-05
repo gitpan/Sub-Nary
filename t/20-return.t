@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 40;
+use Test::More tests => 58;
 
 use Sub::Nary;
 
@@ -31,6 +31,7 @@ my @tests = (
  [ sub { return $a[0] },             1 ],
  [ sub { return @a[1, 2] },          2 ],
  [ sub { return @a[2 .. 4] },        3 ],
+ [ sub { return @a[1, 4 .. 7, 2] },  6 ],
  [ sub { return @a[do{ 1 .. 5 }] },  5 ],
  [ sub { return @a[do{ 1 .. $x }] }, 'list' ],
 
@@ -39,12 +40,21 @@ my @tests = (
  [ sub { return @h{qw/a b/} },     2 ],
  [ sub { return @h{@a[1 .. 3]} },  3 ],
  [ sub { return @h{@a[$y .. 3]} }, 'list' ],
+ [ sub { return keys %h },         'list' ],
+ [ sub { return values %h },       'list' ],
 
  [ sub { return $x, $a[3], $h{c} }, 3 ],
  [ sub { return $x, @a },           'list' ],
  [ sub { return %h, $y },           'list' ],
 
- [ sub { return 1 .. 3 }, 'list' ],
+ [ sub { return 2 .. 4 },                  3 ],
+ [ sub { return $x .. 3 },                 'list' ],
+ [ sub { return 1 .. $x },                 'list' ],
+ [ sub { return '2foo' .. 4 },             3 ],
+ [ sub { my @a = (7, 8); return @a .. 4 }, 'list' ],
+ [ sub { return do { return 1, 2 } .. 3 }, 2 ],
+ [ sub { return 1 .. do { return 2, 3 } }, 2 ],
+ [ sub { my @a = return 6, $x },           2 ],
 
  [ sub { for (1, 2, 3) { return } },                                     0 ],
  [ sub { for (1, 2, 3) { } return 1, 2; },                               2 ],
@@ -60,11 +70,22 @@ my @tests = (
  [ sub { while (1) { return 1, 2 } },       2 ],
  [ sub { while (1) { last; return 1, 2 } }, 2 ],
  [ sub { return 1, 2 while 1 },             2 ],
+
+ [ sub { eval { return } },                         0 ],
+ [ sub { eval { return 1, 2 } },                    2 ],
+ [ sub { eval { }; return $x, 2 },                  2 ],
+ [ sub { return eval { 1, $x }; },                  2 ],
+ [ sub { return 1, eval { $x, eval { $h{foo} } } }, 3 ],
+ [ sub { return eval { return $x, eval { $y } } },  2 ],
+ [ sub { return eval { do { eval { @a } } } },      'list' ],
+
+ [ sub { eval 'return 1, 2' }, 'list' ],
 );
 
 my $i = 1;
 for (@tests) {
  my $r = $sn->nary($_->[0]);
- is_deeply($r, { $_->[1] => 1 }, 'return test ' . $i);
+ my $exp = ref $_->[1] ? $_->[1] : { $_->[1] => 1 };
+ is_deeply($r, $exp, 'return test ' . $i);
  ++$i;
 }

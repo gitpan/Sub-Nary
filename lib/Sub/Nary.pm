@@ -16,13 +16,13 @@ Sub::Nary - Try to count how many elements a subroutine can return in list conte
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
 our $VERSION;
 BEGIN {
- $VERSION  = '0.01';
+ $VERSION  = '0.02';
 }
 
 =head1 SYNOPSIS
@@ -42,7 +42,7 @@ This module uses the L<B> framework to walk into subroutines and try to guess ho
 
 The usual constructor. Currently takes no argument.
 
-=head2 C<nary $coderf>
+=head2 C<nary $coderef>
 
 Takes a code reference to a named or anonymous subroutine, and returns a hash reference whose keys are the possible numbers of returning scalars, and the corresponding values the "probability" to get them. The special key C<'list'> is used to denote a possibly infinite number of returned arguments. The return value hence would look at
 
@@ -102,7 +102,11 @@ returns C<3> or C<4> arguments with probability C<1/2> ; and
 
 never returns C<1> argument but returns C<2> with probability C<1/2 * 1/2 = 1/4>, C<3> with probability C<1/2 * 1/2 + 1/2 * 1/2 = 1/2> and C<4> with probability C<1/4> too.
 
-=item * The C<'list'> state is absorbant in regard of all the other ones.
+=item * If a core function may return different numbers of scalars, each kind is considered equally possible.
+
+For example, C<stat> returns C<13> elements on success and C<0> on error. The according probability will then be C<< { 0 => 0.5, 13 => 0.5 } >>.
+
+=item * The C<list> state is absorbing in regard of all the other ones.
 
 This is just a pedantic way to say that "list + fixed length = list".
 That's why
@@ -112,7 +116,8 @@ That's why
     }
 
 is considered as always returning an unbounded list.
-The convolution law also does not behave the same when C<list> elements are involved : in the following example,
+
+Also, the convolution law does not behave the same when C<list> elements are involved : in the following example,
 
     sub oneorlist {
      if (rand < 0.1) {
@@ -197,16 +202,32 @@ sub add {
 }
 
 my %ops;
+
 $ops{$_} = 1      for scalops;
 $ops{$_} = 0      for qw/stub nextstate/;
 $ops{$_} = 1      for qw/padsv/;
 $ops{$_} = 'list' for qw/padav/;
 $ops{$_} = 'list' for qw/padhv rv2hv/;
-$ops{$_} = 'list' for qw/padany flip/;
+$ops{$_} = 'list' for qw/padany match entereval readline/;
+
+$ops{each}      = { 0 => 0.5, 2 => 0.5 };
+$ops{stat}      = { 0 => 0.5, 13 => 0.5 };
+
+$ops{caller}    = sub { my @a = caller 0; scalar @a }->();
+$ops{localtime} = do { my @a = localtime; scalar @a };
+$ops{gmtime}    = do { my @a = gmtime; scalar @a };
+
+$ops{$_} = { 0 => 0.5, 10 => 0.5 } for map "gpw$_", qw/nam uid ent/;
+$ops{$_} = { 0 => 0.5, 4 => 0.5 }  for map "ggr$_", qw/nam gid ent/;
+$ops{$_} = 'list'                  for qw/ghbyname ghbyaddr ghostent/;
+$ops{$_} = { 0 => 0.5, 4 => 0.5 }  for qw/gnbyname gnbyaddr gnetent/;
+$ops{$_} = { 0 => 0.5, 3 => 0.5 }  for qw/gpbyname gpbynumber gprotoent/;
+$ops{$_} = { 0 => 0.5, 4 => 0.5 }  for qw/gsbyname gsbyport gservent/;
 
 sub enter {
  my ($self, $cv) = @_;
 
+ return 'list' if class($cv) ne 'CV';
  my $op  = $cv->ROOT;
  my $tag = tag($op);
 
@@ -249,7 +270,11 @@ sub expect_list {
  my $n = name($op);
  my $meth = $self->can('pp_' . $n);
  return $self->$meth($op) if $meth;
- return $ops{$n} => 0 if exists $ops{$n};
+ if (exists $ops{$n}) {
+  my $r = $ops{$n};
+  $r = { %$r } if ref $r eq 'HASH';
+  return $r => 0;
+ }
 
  if ($op->flags & OPf_KIDS) {
   my @res = (0);
@@ -278,7 +303,7 @@ sub expect_any {
 
  return ($self->expect_list($op))[0] => 1 if name($op) eq 'return';
 
- if (class($op) eq 'LOGOP') {
+ if (class($op) eq 'LOGOP' and not null $op->first) {
   my @res;
   my ($p, $r);
 
@@ -304,7 +329,7 @@ sub expect_any {
  return $self->expect_list($op);
 }
 
-# Stolen from Sub::Deparse
+# Stolen from B::Deparse
 
 sub padval { $_[0]->{cv}->[0]->PADLIST->ARRAYelt(1)->ARRAYelt($_[1]) }
 
@@ -395,13 +420,12 @@ sub pp_goto {
 sub pp_const {
  my ($self, $op) = @_;
 
- if (class($op) eq 'SVOP' and (my $sv = $self->const_sv($op))) {
-  my $c = class($sv);
-  if ($c eq 'AV') {
-   return $sv->FILL + 1;
-  } elsif ($c eq 'HV') {
-   return 2 * $sv->FILL;
-  }
+ my $sv = $self->const_sv($op);
+ my $c = class($sv);
+ if ($c eq 'AV') {
+  return $sv->FILL + 1;
+ } elsif ($c eq 'HV') {
+  return 2 * $sv->FILL;
  }
 
  return 1;
@@ -421,9 +445,45 @@ sub pp_rv2av {
  return (name($op) eq 'const') ? $self->expect_any($op) : 'list';
 }
 
-sub pp_aassign { $_[0]->expect_any($_[1]->first) }
+sub pp_aassign {
+ my ($self, $op) = @_;
+
+ $op = $op->first;
+
+ # Can't assign to return
+ my ($p, $r) = $self->expect_list($op->sibling);
+ return $p => 0 if not exists $p->{list};
+
+ $self->expect_any($op);
+}
 
 sub pp_leaveloop { $_[0]->expect_return($_[1]->first->sibling) }
+
+sub pp_flip {
+ my ($self, $op) = @_;
+
+ $op = $op->first;
+ return 'list' if name($op) ne 'range';
+
+ my $begin = $op->first;
+ if (name($begin) eq 'const') {
+  my $end = $begin->sibling;
+  if (name($end) eq 'const') {
+   $begin  = $self->const_sv($begin);
+   $end    = $self->const_sv($end);
+   no warnings 'numeric';
+   return int(${$end->object_2svref}) - int(${$begin->object_2svref}) + 1;
+  } else {
+   my ($p, $r) = $self->expect_return($end);
+   return $p => 1 if $r;
+  }
+ } else {
+  my ($p, $r) = $self->expect_return($begin);
+  return $p => 1 if $r;
+ }
+
+ return 'list'
+}
 
 =head1 EXPORT
 
