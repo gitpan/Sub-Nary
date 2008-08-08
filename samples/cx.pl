@@ -42,7 +42,7 @@ sub wut2 {
  } elsif ($y) {
   sub { qr/wat/ }, %h;
  } elsif (@z) {
-  return [ ] 
+  return [ ];
  }
 }
 

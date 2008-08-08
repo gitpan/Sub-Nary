@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 58;
+use Test::More tests => 67;
 
 use Sub::Nary;
 
@@ -23,6 +23,10 @@ my @tests = (
  [ sub { do { 1; return 2, 3 } },              2 ],
  [ sub { do { 1; return 2, 3; 4 } },           2 ],
  [ sub { do { 1; return 2, return 3 } },       1 ],
+ [ sub { do { return if $x; 2, 3 }, 4 },       { 0 => 0.5, 3 => 0.5 } ],
+ [ sub { do { do { return if $x }, 3 }, 4 },   { 0 => 0.5, 3 => 0.5 } ],
+ [ sub { do { return if $x; 2, 3 }, do { return 1 if $y; 4, 5, 6 } },
+                                           { 0 => 0.5, 1 => 0.25, 5 => 0.25 } ],
 
  [ sub { return $x },     1 ],
  [ sub { return $x, $y }, 2 ],
@@ -58,6 +62,9 @@ my @tests = (
 
  [ sub { for (1, 2, 3) { return } },                                     0 ],
  [ sub { for (1, 2, 3) { } return 1, 2; },                               2 ],
+ [ sub { for (do { return 1, 2, 3 }) { } return 1, 2; },                 3 ],
+ [ sub { for (do { return 2, 3 if $x }) { } },      { 2 => 0.5, 0 => 0.5 } ],
+ [ sub { for (1, 2, 3) { return 1, 2 if $x } },                     'list' ],
  [ sub { for ($x, 1, $y) { return 1, 2 } },                              2 ],
  [ sub { for (@a) { return 1, do { $x } } },                             2 ],
  [ sub { for (keys %h) { return do { 1 }, do { return @a[0, 2] } } },    2 ],
@@ -65,11 +72,14 @@ my @tests = (
  [ sub { for (my $i; $i < 10; ++$i) { return 1, @a[do{return 2, 3}] } }, 2 ],
  [ sub { return 1, 2 for 1 .. 4 },                                       2 ],
 
- [ sub { while (1) { return } },            0 ],
- [ sub { while (1) { } return 1, 2 },       2 ],
- [ sub { while (1) { return 1, 2 } },       2 ],
- [ sub { while (1) { last; return 1, 2 } }, 2 ],
- [ sub { return 1, 2 while 1 },             2 ],
+ [ sub { while (1) { return } },                 0 ],
+ [ sub { while (1) { } return 1, 2 },            2 ],
+ [ sub { while (1) { return 1, 2 } },            2 ],
+ [ sub { while (1) { return 1, 2 if $x } },      'list' ],
+ [ sub { while (1) { last; return 1, 2 } },      2 ],
+ [ sub { return 1, 2 while 1 },                  2 ],
+ [ sub { while (do { return 2, 3 }) { } },       2 ],
+ [ sub { while (do { return 2, 3 if $x }) { } }, 'list' ],
 
  [ sub { eval { return } },                         0 ],
  [ sub { eval { return 1, 2 } },                    2 ],

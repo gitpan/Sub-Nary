@@ -15,4 +15,9 @@ my $min_pc = 0.18;
 eval "use Pod::Coverage $min_pc";
 plan skip_all => "Pod::Coverage $min_pc required for testing POD coverage" if $@;
 
-all_pod_coverage_ok({ also_private => [ qr/^pp_/, qr/^expect_/, qw/add combine const_sv enter gv_or_padgv name null padval scalops tag/ ] });
+all_pod_coverage_ok({ also_private => [
+ qr/^inspect/, qr/^pp_/, qw/enter/,
+ qw/tag scalops/,
+ qw/null zero count scale normalize add combine cumulate power/,
+ qw/name const_sv gv_or_padgv padval/
+] });

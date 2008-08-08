@@ -27,10 +27,9 @@ WriteMakefile(
     ABSTRACT_FROM => 'lib/Sub/Nary.pm',
     PL_FILES      => {},
     PREREQ_PM     => {
-        'B'          => 0,
-        'Carp'       => 0,
-        'List::Util' => 0,
-        'XSLoader'   => 0
+        'B'        => 0,
+        'Carp'     => 0,
+        'XSLoader' => 0
     },
     dist          => {
         PREOP        => 'pod2text lib/Sub/Nary.pm > $(DISTVNAME)/README; '

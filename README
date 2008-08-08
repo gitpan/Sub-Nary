@@ -3,7 +3,7 @@ NAME
     list context.
 
 VERSION
-    Version 0.02
+    Version 0.03
 
 SYNOPSIS
         use Sub::Nary;
@@ -41,8 +41,7 @@ METHODS
 PROBABILITY OF RETURN
     The probability is computed as such :
 
-    * All the returning points in the same subroutine (i.e. all the explicit
-    "return" and the last computed value) are considered equally possible.
+    * When branching, each branch is considered equally possible.
         For example, the subroutine
 
             sub simple {
@@ -65,10 +64,10 @@ PROBABILITY OF RETURN
              }
             }
 
-        it is considered to return 1 (when the two tests fail, the last
-        computed value is returned, which here is "$x > 0.9" evaluated in
-        the scalar context of the test), 2 or 3 arguments each with
-        probability "1/3".
+        it is considered to return 3 scalars with probability "1/2", 2 with
+        probability "1/2 * 1/2 = 1/4" and 1 (when the two tests fail, the
+        last computed value is returned, which here is "$x > 0.9" evaluated
+        in the scalar context of the test) with remaining probability "1/4".
 
     * The total probability law for a given returning point is the
     convolution product of the probabilities of its list elements.
@@ -134,8 +133,8 @@ CAVEATS
 DEPENDENCIES
     perl 5.8.1.
 
-    Carp (standard since perl 5), B (since perl 5.005), XSLoader (since perl
-    5.006) and List::Util (since perl 5.007003).
+    Carp (standard since perl 5), B (since perl 5.005) and XSLoader (since
+    perl 5.006).
 
 AUTHOR
     Vincent Pit, "<perl at profvince.com>", <http://www.profvince.com>.

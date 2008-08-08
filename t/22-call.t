@@ -3,11 +3,13 @@
 use strict;
 use warnings;
 
-use Test::More tests => 41;
+use Test::More tests => 43;
 
 use Sub::Nary;
 
 my $sn = Sub::Nary->new();
+
+my $x;
 
 sub CORE::GLOBAL::reset {
  return 1, 2, 3
@@ -24,6 +26,8 @@ sub rec1 { rec2(); }
 sub rec2 { rec1(); }
 
 my @tests = (
+ [ sub { hlaghlaghlagh() }, 'list' ],
+
  [ sub { zero }, 0 ],
  [ sub { one  }, 1 ],
  [ sub { two  }, 2 ],
@@ -36,8 +40,9 @@ my @tests = (
  [ sub { do { one, do { two } } },  3 ],
  [ sub { do { lots, do { one } } }, 'list' ],
 
- [ sub { 1, return two, do { 4 } }, 3 ],
- [ sub { two 1, return 2 },         1 ],
+ [ sub { 1, return two, do { 4 } },         3 ],
+ [ sub { two 1, return 2 },                 1 ],
+ [ sub { two 1, do { return 5 if $x; 3 } }, { 1 => 0.5, 2 => 0.5 } ],
 
  [ sub { 1, one(), 2 },   3 ],
  [ sub { 1, one(), @_ },  'list' ],

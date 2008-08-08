@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 32;
+use Test::More tests => 34;
 
 use Sub::Nary;
 
@@ -12,6 +12,9 @@ my $sn = Sub::Nary->new();
 my ($x, %h);
 
 my @tests = (
+ [ sub { delete $h{foo} },             1 ],
+ [ sub { delete @h{qw/foo bar baz/} }, 3 ],
+
  [ sub { return <$x> }, 'list' ],
 
  [ sub { -f $0, -r $0 }, 2 ],
@@ -54,7 +57,7 @@ my @tests = (
  [ sub { endprotoent }, 1 ],
  [ sub { endservent },  1 ],
 
- [ sub { <*.*> }, { list => 1 / 3, 1 => 2 / 3 } ],
+ [ sub { <*.*> }, 1 ],
 );
 
 my $i = 1;

@@ -6,7 +6,6 @@ use strict;
 use warnings;
 
 use Carp qw/croak/;
-use List::Util qw/reduce sum/;
 
 use B qw/class ppname svref_2object OPf_KIDS/;
 
@@ -16,13 +15,13 @@ Sub::Nary - Try to count how many elements a subroutine can return in list conte
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 =cut
 
 our $VERSION;
 BEGIN {
- $VERSION  = '0.02';
+ $VERSION  = '0.03';
 }
 
 =head1 SYNOPSIS
@@ -60,7 +59,7 @@ The probability is computed as such :
 
 =over 4
 
-=item * All the returning points in the same subroutine (i.e. all the explicit C<return> and the last computed value) are considered equally possible.
+=item * When branching, each branch is considered equally possible.
 
 For example, the subroutine
 
@@ -84,7 +83,7 @@ As for
      }
     }
 
-it is considered to return C<1> (when the two tests fail, the last computed value is returned, which here is C<< $x > 0.9 >> evaluated in the scalar context of the test), C<2> or C<3> arguments each with probability C<1/3>.
+it is considered to return C<3> scalars with probability C<1/2>, C<2> with probability C<1/2 * 1/2 = 1/4> and C<1> (when the two tests fail, the last computed value is returned, which here is C<< $x > 0.9 >> evaluated in the scalar context of the test) with remaining probability C<1/4>.
 
 =item * The total probability law for a given returning point is the convolution product of the probabilities of its list elements.
 
@@ -165,50 +164,39 @@ sub nary {
  my $sub  = shift;
 
  $self->{cv} = [ ];
- return $self->enter(svref_2object($sub));
+ return ($self->enter(svref_2object($sub)))[1];
 }
 
 sub name ($) {
+ local $SIG{__DIE__} = \&Carp::confess;
  my $n = $_[0]->name;
  $n eq 'null' ? substr(ppname($_[0]->targ), 3) : $n
 }
 
-sub combine {
- reduce {{
-  my %res;
-  my $la = delete $a->{list};
-  my $lb = delete $b->{list};
-  if (defined $la || defined $lb) {
-   $la ||= 0;
-   $lb ||= 0;
-   $res{list} = $la + $lb - $la * $lb;
-  }
-  while (my ($ka, $va) = each %$a) {
-   $ka = int $ka;
-   while (my ($kb, $vb) = each %$b) {
-    my $key = $ka + int $kb;
-    $res{$key} += $va * $vb;
-   }
-  }
-  \%res
- }} map { (ref) ? $_ : { $_ => 1 } } grep defined, @_;
-}
-
-sub add {
- reduce {
-  $a->{$_} += $b->{$_} for keys %$b;
-  $a
- } map { (ref) ? $_ : { $_ => 1 } } grep defined, @_;
+sub power {
+ my ($p, $n, $c) = @_;
+ return unless defined $p;
+ return { 0 => $c } unless $n;
+ if ($n eq 'list') {
+  my $z = delete $p->{0};
+  return { 'list' => $c } unless $z;
+  return { 0      => $c } if $z == 1;
+  return { 0 => $c * $z, list => $c * (1 - $z) };
+ }
+ my $r = combine map { { %$p } } 1 .. $n;
+ $r->{$_} *= $c for keys %$r;
+ return $r;
 }
 
 my %ops;
 
 $ops{$_} = 1      for scalops;
-$ops{$_} = 0      for qw/stub nextstate/;
+$ops{$_} = 0      for qw/stub nextstate pushmark iter unstack/;
 $ops{$_} = 1      for qw/padsv/;
 $ops{$_} = 'list' for qw/padav/;
 $ops{$_} = 'list' for qw/padhv rv2hv/;
-$ops{$_} = 'list' for qw/padany match entereval readline/;
+$ops{$_} = 'list' for qw/padany/;
+$ops{$_} = 'list' for qw/match entereval readline/;
 
 $ops{each}      = { 0 => 0.5, 2 => 0.5 };
 $ops{stat}      = { 0 => 0.5, 13 => 0.5 };
@@ -227,106 +215,108 @@ $ops{$_} = { 0 => 0.5, 4 => 0.5 }  for qw/gsbyname gsbyport gservent/;
 sub enter {
  my ($self, $cv) = @_;
 
- return 'list' if class($cv) ne 'CV';
+ return undef, 'list' if class($cv) ne 'CV';
  my $op  = $cv->ROOT;
  my $tag = tag($op);
 
- return { %{$self->{cache}->{$tag}} } if exists $self->{cache}->{$tag};
+ return undef, { %{$self->{cache}->{$tag}} } if exists $self->{cache}->{$tag};
 
  # Anything can happen with recursion
  for (@{$self->{cv}}) {
-  return 'list' if $tag == tag($_->ROOT);
+  return undef, 'list' if $tag == tag($_->ROOT);
  }
 
  unshift @{$self->{cv}}, $cv;
- (my $r, undef) = $self->expect_any($op->first);
+ my $r = add $self->inspect($op->first);
  shift @{$self->{cv}};
 
- $r = { $r => 1} unless ref $r;
- my $total = sum values %$r;
- $r = { map { $_ => $r->{$_} / $total } keys %$r };
+ $r = { $r => 1 } unless ref $r;
  $self->{cache}->{$tag} = { %$r };
- return $r;
+ return undef, $r;
 }
 
-sub expect_return {
- my ($self, $op) = @_;
-
- return ($self->expect_list($op))[0] => 1 if name($op) eq 'return';
-
- if ($op->flags & OPf_KIDS) {
-  for ($op = $op->first; not null $op; $op = $op->sibling) {
-   my ($p, $r) = $self->expect_return($op);
-   return $p => 1 if $r;
-  }
- }
-
- return;
-}
-
-sub expect_list {
+sub inspect {
  my ($self, $op) = @_;
 
  my $n = name($op);
+ return add($self->inspect_kids($op)), undef if $n eq 'return';
+
  my $meth = $self->can('pp_' . $n);
  return $self->$meth($op) if $meth;
+
  if (exists $ops{$n}) {
-  my $r = $ops{$n};
-  $r = { %$r } if ref $r eq 'HASH';
-  return $r => 0;
+  my $l = $ops{$n};
+  $l = { %$l } if ref $l;
+  return undef, $l;
  }
-
- if ($op->flags & OPf_KIDS) {
-  my @res = (0);
-  my ($p, $r);
-  for ($op = $op->first; not null $op; $op = $op->sibling) {
-   my $n = name($op);
-   next if $n eq 'pushmark';
-   if ($n eq 'nextstate'
-       and not null(($op = $op->sibling)->sibling)) {
-    ($p, $r) = $self->expect_return($op);
-    return $p => 1 if $r;
-   } else {
-    ($p, $r) = $self->expect_any($op);
-    return $p => 1 if $r;
-    push @res, $p;
-   }
-  }
-  return (combine @res) => 0;
- }
-
- return;
-}
-
-sub expect_any {
- my ($self, $op) = @_;
-
- return ($self->expect_list($op))[0] => 1 if name($op) eq 'return';
 
  if (class($op) eq 'LOGOP' and not null $op->first) {
   my @res;
-  my ($p, $r);
 
-  my $op   = $op->first;
-  ($p, $r) = $self->expect_return($op);
-  return $p => 1 if $r;
+  my $op = $op->first;
+  my ($r1, $l1) = $self->inspect($op);
+  return $r1, $l1 if defined $r1 and zero $l1;
+  my $c = count $l1;
 
   $op = $op->sibling;
-  push @res, ($self->expect_any($op))[0];
+  my ($r2, $l2) = $self->inspect($op);
 
-  # If the logop has no else branch, it can also return the *scalar* result of
-  # the conditional
   $op = $op->sibling;
+  my ($r3, $l3);
   if (null $op) {
-   push @res, 1;
+   # If the logop has no else branch, it can also return the *scalar* result of
+   # the conditional
+   $l3 = { 1 => 1 };
   } else {
-   push @res, ($self->expect_any($op))[0];
+   ($r3, $l3) = $self->inspect($op);
   }
 
-  return (add @res) => 0;
+  my $r = add $r1, scale $c / 2, add $r2, $r3;
+  my $l = scale $c / 2, add $l2, $l3;
+  return $r, $l
  }
 
- return $self->expect_list($op);
+ return $self->inspect_kids($op);
+}
+
+sub inspect_kids {
+ my ($self, $op) = @_;
+
+ return undef, 0 unless $op->flags & OPf_KIDS;
+
+ $op = $op->first;
+ return undef, 0 if null $op;
+ if (name($op) eq 'pushmark') {
+  $op = $op->sibling;
+  return undef, 0 if null $op;
+ }
+
+ my ($r, @l);
+ my $c = 1;
+ for (; not null $op; $op = $op->sibling) {
+  my $n = name($op);
+  if ($n eq 'nextstate') {
+   @l  = ();
+   next;
+  }
+  if ($n eq 'lineseq') {
+   @l  = ();
+   $op = $op->first;
+   redo;
+  }
+  my ($rc, $lc) = $self->inspect($op);
+  $c = 1 - count $r;
+  $r = add $r, scale $c, $rc if defined $rc;
+  if (not defined $lc) {
+   @l = ();
+   last;
+  }
+  push @l, scale $c, $lc;
+ }
+
+ my $l = scale +(1 - count $r), normalize combine @l;
+
+ return $r, $l;
 }
 
 # Stolen from B::Deparse
@@ -351,17 +341,22 @@ sub const_sv {
 }
 
 sub pp_entersub {
- my ($self, $op, $exp) = @_;
+ my ($self, $op) = @_;
 
- my $next = $op;
- while ($next->flags & OPf_KIDS) {
-  $next = $next->first;
+ $op = $op->first while $op->flags & OPf_KIDS;
+ return undef, 0 if null $op;
+ if (name($op) eq 'pushmark') {
+  $op = $op->sibling;
+  return undef, 0 if null $op;
  }
- while (not null $next) {
-  $op = $next;
-  my ($p, $r) = $self->expect_return($op, $exp);
-  return $p => 1 if $r;
-  $next = $op->sibling;
+
+ my $r;
+ my $c = 1;
+ for (; not null $op->sibling; $op = $op->sibling) {
+  my ($rc, $lc) = $self->inspect($op);
+  return $rc, $lc if defined $rc and not defined $lc;
+  $r = add $r, scale $c, $rc;
+  $c *= count $lc;
  }
 
  if (name($op) eq 'rv2cv') {
@@ -375,25 +370,26 @@ sub pp_entersub {
    }
    $n  = name($op)
   } while ($op->flags & OPf_KIDS and { map { $_ => 1 } qw/null leave/ }->{$n});
-  return 'list' unless { map { $_ => 1 } qw/gv refgen/ }->{$n};
+  return 'list', undef unless { map { $_ => 1 } qw/gv refgen/ }->{$n};
   local $self->{sub} = 1;
-  return $self->expect_any($op, $exp);
+  my ($rc, $lc) = $self->inspect($op);
+  return $r, scale $c, $lc;
  } else {
   # Method call ?
-  return 'list';
+  return $r, { 'list' => $c };
  }
 }
 
 sub pp_gv {
  my ($self, $op) = @_;
 
- return $self->{sub} ? $self->enter($self->gv_or_padgv($op)->CV) : 1
+ return $self->{sub} ? $self->enter($self->gv_or_padgv($op)->CV) : (undef, 1)
 }
 
 sub pp_anoncode {
  my ($self, $op) = @_;
 
- return $self->{sub} ? $self->enter($self->const_sv($op)) : 1
+ return $self->{sub} ? $self->enter($self->const_sv($op)) : (undef, 1)
 }
 
 sub pp_goto {
@@ -414,35 +410,42 @@ sub pp_goto {
   $n  = $nn;
  }
 
- return 'list';
+ return undef, 'list';
 }
 
 sub pp_const {
  my ($self, $op) = @_;
 
+ return undef, 0 unless $op->isa('B::SVOP');
+
  my $sv = $self->const_sv($op);
- my $c = class($sv);
+ my $n  = 1;
+ my $c  = class($sv);
  if ($c eq 'AV') {
-  return $sv->FILL + 1;
+  $n = $sv->FILL + 1
  } elsif ($c eq 'HV') {
-  return 2 * $sv->FILL;
+  $n = 2 * $sv->KEYS
  }
 
- return 1;
+ return undef, $n
 }
 
-sub pp_aslice { $_[0]->expect_any($_[1]->first->sibling) }
+sub pp_aslice { $_[0]->inspect($_[1]->first->sibling) }
 
 sub pp_hslice;
 *pp_hslice = *pp_aslice{CODE};
 
-sub pp_lslice { $_[0]->expect_any($_[1]->first) }
+sub pp_lslice { $_[0]->inspect($_[1]->first) }
 
 sub pp_rv2av {
  my ($self, $op) = @_;
  $op = $op->first;
 
- return (name($op) eq 'const') ? $self->expect_any($op) : 'list';
+ if (name($op) eq 'gv') {
+  return undef, { list => 1 };
+ }
+
+ $self->inspect($op);
 }
 
 sub pp_aassign {
@@ -451,38 +454,122 @@ sub pp_aassign {
  $op = $op->first;
 
  # Can't assign to return
- my ($p, $r) = $self->expect_list($op->sibling);
- return $p => 0 if not exists $p->{list};
+ my $l = ($self->inspect($op->sibling))[1];
+ return undef, $l if not exists $l->{list};
 
- $self->expect_any($op);
+ $self->inspect($op);
 }
 
-sub pp_leaveloop { $_[0]->expect_return($_[1]->first->sibling) }
+sub pp_leaveloop {
+ my ($self, $op) = @_;
+
+ $op = $op->first;
+ my ($r1, $l1);
+ my $for;
+ if (name($op) eq 'enteriter') { # for loop ?
+  $for = 1;
+  ($r1, $l1) = $self->inspect($op);
+  return $r1, $l1 if defined $r1 and zero $l1;
+ }
+
+ $op = $op->sibling;
+ my ($r2, $l2);
+ if (name($op->first) eq 'and') {
+  ($r2, $l2) = $self->inspect($op->first->first);
+  return $r2, $l2 if defined $r2 and zero $l2;
+  my $c = count $l2;
+  return { list => 1 }, undef if !$for and defined $r2;
+  my ($r3, $l3) = $self->inspect($op->first->first->sibling);
+  return { list => 1 }, undef if defined $r3 and defined $l3;
+  $r2 = add $r2, scale $c, $r3;
+ } else {
+  ($r2, $l2) = $self->inspect($op);
+  return { list => 1 }, undef if defined $r2 and defined $l2;
+ }
+
+ my $r = (defined $r1) ? add $r1, scale +(1 - count $r1), $r2
+                       : $r2;
+ my $c = 1 - count $r;
+ return $r, $c ? { 0 => $c } : undef;
+}
 
 sub pp_flip {
  my ($self, $op) = @_;
 
  $op = $op->first;
- return 'list' if name($op) ne 'range';
+ return $self->inspect($op) if name($op) ne 'range';
 
+ my ($r, $l);
  my $begin = $op->first;
  if (name($begin) eq 'const') {
   my $end = $begin->sibling;
   if (name($end) eq 'const') {
-   $begin  = $self->const_sv($begin);
-   $end    = $self->const_sv($end);
-   no warnings 'numeric';
-   return int(${$end->object_2svref}) - int(${$begin->object_2svref}) + 1;
+   $begin = $self->const_sv($begin);
+   $end   = $self->const_sv($end);
+   {
+    no warnings 'numeric';
+    $begin = int ${$begin->object_2svref};
+    $end   = int ${$end->object_2svref};
+   }
+   return undef, $end - $begin + 1;
   } else {
-   my ($p, $r) = $self->expect_return($end);
-   return $p => 1 if $r;
+   ($r, $l) = $self->inspect($end);
   }
  } else {
-  my ($p, $r) = $self->expect_return($begin);
-  return $p => 1 if $r;
+  ($r, $l) = $self->inspect($begin);
  }
 
- return 'list'
+ my $c = 1 - count $r;
+ return $r, $c ? { 'list' => $c } : undef
+}
+
+sub pp_grepwhile {
+ my ($self, $op) = @_;
+
+ $op = $op->first;
+ return $self->inspect($op) if name($op) ne 'grepstart';
+ $op = $op->first->sibling;
+
+ my ($r2, $l2) = $self->inspect($op->sibling);
+ return $r2, $l2 if defined $r2 and zero $l2;
+ my $c2 = count $l2; # First one to happen
+
+ my ($r1, $l1) = $self->inspect($op);
+ return (add $r2, scale $c2, $r1), undef if defined $r1 and zero $l1
+                                                        and not zero $l2;
+ my $c1 = count $l1;
+
+ $l2 = { $l2 => 1 } unless ref $l2;
+ my $r = add $r2,
+          scale $c2,
+            add map { scale $l2->{$_}, cumulate $r1, $_, $c1 } keys %$l2;
+ my $c = 1 - count $r;
+ return $r, $c ? { ((zero $l2) ? 0 : 'list') => $c } : undef;
+}
+
+sub pp_mapwhile {
+ my ($self, $op) = @_;
+
+ $op = $op->first;
+ return $self->inspect($op) if name($op) ne 'mapstart';
+ $op = $op->first->sibling;
+
+ my ($r2, $l2) = $self->inspect($op->sibling);
+ return $r2, $l2 if defined $r2 and zero $l2;
+ my $c2 = count $l2; # First one to happen
+
+ my ($r1, $l1) = $self->inspect($op);
+ return (add $r2, scale $c2, $r1), undef if defined $r1 and zero $l1
+                                                        and not zero $l2;
+ my $c1 = count $l1;
+
+ $l2 = { $l2 => 1 } unless ref $l2;
+ my $r = add $r2,
+          scale $c2,
+            add map { scale $l2->{$_}, cumulate $r1, $_, $c1 } keys %$l2;
+ my $c = 1 - count $r;
+ my $l = scale $c, normalize add map { power $l1, $_, $l2->{$_} } keys %$l2;
+ return $r, $l;
 }
 
 =head1 EXPORT
@@ -499,7 +586,7 @@ C<wantarray> isn't specialized when encountered in the optree.
 
 L<perl> 5.8.1.
 
-L<Carp> (standard since perl 5), L<B> (since perl 5.005), L<XSLoader> (since perl 5.006) and L<List::Util> (since perl 5.007003).
+L<Carp> (standard since perl 5), L<B> (since perl 5.005) and L<XSLoader> (since perl 5.006).
 
 =head1 AUTHOR
 
